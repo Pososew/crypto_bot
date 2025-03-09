@@ -46,7 +46,13 @@ def apply_indicators(df):
     return df
 
 def check_trade_signal_extended(df):
+    """
+    Логика для новых сделок (не для открытых позиций):
+      - Проверяем условия по RSI, SMA, объёму, уровню сопротивления и ATR.
+      - Если минимум 3 из 6 условий совпадают, возвращаем сигнал BUY или SELL.
+    """
     latest = df.iloc[-1]
+
     rsi_buy = latest['RSI'] < 30
     rsi_sell = latest['RSI'] > 70
 
@@ -79,6 +85,20 @@ def check_trade_signal_extended(df):
     else:
         return None
 
+def get_hourly_data(symbol, interval="1h", lookback=6):
+    """Получаем последние 'lookback' 1h свечей для анализа максимума/минимума"""
+    klines = client.get_klines(symbol=symbol, interval=interval, limit=lookback)
+    df = pd.DataFrame(klines, columns=[
+        'timestamp', 'open', 'high', 'low', 'close', 'volume',
+        'close_time','quote_asset_volume','number_of_trades',
+        'taker_buy_base_volume','taker_buy_quote_volume','ignore'
+    ])
+    df['open'] = df['open'].astype(float)
+    df['high'] = df['high'].astype(float)
+    df['low'] = df['low'].astype(float)
+    df['close'] = df['close'].astype(float)
+    return df
+
 def start_telegram_bot_in_process():
     run_telegram_bot()
 
@@ -92,8 +112,9 @@ if __name__ == "__main__":
     telegram_process = multiprocessing.Process(target=start_telegram_bot_in_process)
     telegram_process.start()
     
-    print("DEBUG: Перед циклом. Запускаем основной цикл проверки позиций...")
-    interval_seconds = 300  # Каждые 1 час (анализ 1h свечей)
+    print("DEBUG: Перед основным циклом проверки позиций...")
+    # Анализируем позиции на 1h таймфрейме, запускаем каждые 5 минут.
+    interval_seconds = 300
     while True:
         print("DEBUG: Начало цикла проверки позиций...")
         if not is_signals_enabled():
@@ -101,9 +122,10 @@ if __name__ == "__main__":
         else:
             positions = load_positions()
             for symbol in SYMBOLS:
+                # Проверяем, есть ли открытая позиция для данного символа
                 open_pos = None
                 for pos in positions:
-                    if pos["coin"] == symbol:
+                    if pos["coin"].upper() == symbol.upper():
                         open_pos = pos
                         break
                 if open_pos is None:
@@ -111,27 +133,35 @@ if __name__ == "__main__":
                     print(f"Нет открытой позиции для {symbol}")
                 else:
                     side = open_pos["side"].upper()
-                    def get_hourly_data(symbol, lookback=2):
-                        klines = client.get_klines(symbol=symbol, interval="1h", limit=lookback)
-                        df = pd.DataFrame(klines, columns=[
-                            'timestamp','open','high','low','close','volume',
-                            'close_time','quote_asset_volume','number_of_trades',
-                            'taker_buy_base_volume','taker_buy_quote_volume','ignore'
-                        ])
-                        df['open'] = df['open'].astype(float)
-                        df['close'] = df['close'].astype(float)
-                        return df
-                    df_hour = get_hourly_data(symbol, lookback=2)
-                    last = df_hour.iloc[-1]
-                    open_price = last['open']
-                    close_price = last['close']
+                    # Получаем 1h свечи для анализа разворота (последняя свеча)
+                    df_hour = get_hourly_data(symbol, interval="1h", lookback=2)
+                    last_candle = df_hour.iloc[-1]
+                    open_price = last_candle['open']
+                    close_price = last_candle['close']
                     diff = (close_price - open_price) / open_price
+                    reversal = False
                     if side == "SELL" and diff > 0.003:
-                        msg = f"Сейчас лучше закрыть позицию, так как цена развернулась вверх на монете {symbol}"
-                        send_telegram_message(msg)
-                        print(msg)
+                        reversal = True
+                        msg = f"Сейчас лучше закрыть позицию, так как цена развернулась вверх на монете {symbol}."
                     elif side == "BUY" and diff < -0.003:
-                        msg = f"Сейчас лучше закрыть позицию, так как цена развернулась вниз на монете {symbol}"
+                        reversal = True
+                        msg = f"Сейчас лучше закрыть позицию, так как цена развернулась вниз на монете {symbol}."
+                    
+                    # Дополнительно анализируем максимальное/минимальное значение за последние 6 часов
+                    df_recent = get_hourly_data(symbol, interval="1h", lookback=6)
+                    if side == "BUY":
+                        max_high = df_recent['high'].max()
+                        # Если текущая цена значительно ниже максимума (например, более 0.3% ниже)
+                        if (max_high - close_price) / max_high >= 0.003:
+                            reversal = True
+                            msg = f"Ваша открытая позиция на монете {symbol} достигла своего максимума. Советую закрыть позицию."
+                    else:  # SELL
+                        min_low = df_recent['low'].min()
+                        if (close_price - min_low) / min_low >= 0.003:
+                            reversal = True
+                            msg = f"Ваша открытая позиция на монете {symbol} достигла своего минимума. Советую закрыть позицию."
+                    
+                    if reversal:
                         send_telegram_message(msg)
                         print(msg)
                     else:
