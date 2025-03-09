@@ -1,0 +1,18 @@
+[
+  {
+    "coin": "BTCUSDT",
+    "side": "BUY",
+    "entry": 83597.13,
+    "stop_loss": 81925.18740000001,
+    "take_profit": 88612.9578,
+    "leverage": 5.0
+  },
+  {
+    "coin": "ETHUSDT",
+    "side": "BUY",
+    "entry": 2040.2,
+    "stop_loss": 1999.396,
+    "take_profit": 2162.612,
+    "leverage": 10.0
+  }
+]
