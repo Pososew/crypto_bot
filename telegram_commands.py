@@ -123,41 +123,40 @@ async def save_user_trade(update: Update, context: CallbackContext):
         await update.message.reply_text("⚠️ Введите корректную сумму!")
 
 # ==== Работа с позициями ====
-position_creation = {}
-
+# При добавлении позиции проверяем, если по монете уже есть открытая позиция
 async def add_position(update: Update, context: CallbackContext):
-    """Начинает процесс добавления новой позиции"""
     chat_id = update.message.chat_id
     position_creation[chat_id] = {"step": 1}
     await update.message.reply_text("Укажите монету для новой позиции (например: BTCUSDT):")
 
 async def set_position_coin(update: Update, context: CallbackContext):
-    """Запрашивает направление (BUY/SELL) для новой позиции"""
     chat_id = update.message.chat_id
-    if chat_id not in position_creation:
-        return
-    position_creation[chat_id]["coin"] = update.message.text.strip().upper()
-    position_creation[chat_id]["step"] = 2
+    coin = update.message.text.strip().upper()
+    # Проверяем, есть ли уже открытая позиция по этой монете
+    from config import load_positions
+    positions = load_positions()
+    for pos in positions:
+        if pos.get("coin", "").upper() == coin:
+            await update.message.reply_text(f"По монете {coin} у вас уже открыта позиция.")
+            if chat_id in position_creation:
+                del position_creation[chat_id]
+            return
+    # Если позиции нет, продолжаем процесс создания
+    position_creation[chat_id] = {"step": 2, "coin": coin}
     await update.message.reply_text("Введите направление (BUY или SELL):")
 
 async def set_position_side(update: Update, context: CallbackContext):
-    """Запрашивает плечо для новой позиции"""
     chat_id = update.message.chat_id
-    if chat_id not in position_creation:
-        return
     side = update.message.text.strip().upper()
     if side not in ["BUY", "SELL"]:
         await update.message.reply_text("⚠️ Укажите BUY или SELL!")
         return
     position_creation[chat_id]["side"] = side
     position_creation[chat_id]["step"] = 3
-    await update.message.reply_text("Введите плечо (0 для отсутствия, или 2, 3, 5, 10):")
+    await update.message.reply_text("Введите плечо (0 если без плеча, или 2, 3, 5, 10):")
 
 async def set_position_leverage(update: Update, context: CallbackContext):
-    """Обрабатывает ввод плеча для новой позиции и переходит к вводу цены входа"""
     chat_id = update.message.chat_id
-    if chat_id not in position_creation:
-        return
     try:
         leverage = float(update.message.text.strip())
         allowed_leverages = [0, 2, 3, 5, 10]
@@ -171,11 +170,8 @@ async def set_position_leverage(update: Update, context: CallbackContext):
         await update.message.reply_text("⚠️ Введите корректное число для плеча!")
 
 async def set_position_entry(update: Update, context: CallbackContext):
-    """Сохраняет позицию и рассчитывает SL/TP"""
     from config import load_positions, save_positions
     chat_id = update.message.chat_id
-    if chat_id not in position_creation:
-        return
     try:
         entry_price = float(update.message.text)
         coin = position_creation[chat_id]["coin"]
@@ -193,22 +189,22 @@ async def set_position_entry(update: Update, context: CallbackContext):
         }
         positions.append(new_pos)
         save_positions(positions)
-        await update.message.reply_text(
+        msg = (
             f"✅ Позиция добавлена:\nМонета: {coin}\nНаправление: {side}\nЦена входа: {entry_price:.2f}\n"
             f"Плечо: {leverage}x\nСтоп‑лосс: {stop_loss:.2f}\nТейк‑профит: {take_profit:.2f}"
         )
+        await update.message.reply_text(msg)
     except ValueError:
         await update.message.reply_text("⚠️ Введите корректную цену входа!")
-    del position_creation[chat_id]
+    if chat_id in position_creation:
+        del position_creation[chat_id]
 
 async def show_positions(update: Update, context: CallbackContext):
-    """Показывает список всех открытых позиций с процентным изменением от цены входа и рекомендацией закрыть, если RSI сигнализирует разворот"""
     from config import load_positions
     positions = load_positions()
     if not positions:
         await update.message.reply_text("Нет открытых позиций.")
         return
-    # Создаем клиент для получения текущей цены
     from config import API_KEY, API_SECRET
     from binance.client import Client
     client = Client(API_KEY, API_SECRET)
@@ -223,49 +219,21 @@ async def show_positions(update: Update, context: CallbackContext):
         except Exception as e:
             msg += f"{i}. {coin}: Ошибка получения цены\n"
             continue
-        # Рассчитываем процентное изменение от цены входа
         if side == "BUY":
             percent_change = ((current_price - entry) / entry) * 100
-        else:  # SELL
+        else:
             percent_change = ((entry - current_price) / entry) * 100
-
-        # Для рекомендаций получим RSI для монеты
-        def get_rsi_for_coin(coin):
-            from binance.client import Client
-            from config import API_KEY, API_SECRET
-            client = Client(API_KEY, API_SECRET)
-            candles = client.get_klines(symbol=coin, interval="1m", limit=100)
-            import pandas as pd
-            import ta
-            df = pd.DataFrame(candles, columns=[
-                'timestamp','open','high','low','close','volume',
-                'close_time','quote_asset_volume','number_of_trades',
-                'taker_buy_base_volume','taker_buy_quote_volume','ignore'
-            ])
-            df['close'] = pd.to_numeric(df['close'])
-            rsi = ta.momentum.RSIIndicator(df['close'], window=14).rsi().iloc[-1]
-            return rsi
-
-        rsi = get_rsi_for_coin(coin)
-        recommendation = ""
-        if side == "BUY" and rsi < 20:
-            recommendation = "Рекомендуется закрыть сделку (RSI перепродан)."
-        elif side == "SELL" and rsi > 80:
-            recommendation = "Рекомендуется закрыть сделку (RSI перекуплен)."
         status = f"{percent_change:+.1f}%"
         msg += (
             f"{i}. {coin} ({side})\n"
             f"   Цена входа: {entry:.2f}\n"
             f"   Текущая цена: {current_price:.2f}\n"
             f"   Изменение от входа: {status}\n"
-            f"   (Плечо: {pos.get('leverage',0)}x, SL = {pos['stop_loss']:.2f}, TP = {pos['take_profit']:.2f})\n"
+            f"   (Плечо: {pos.get('leverage', 0)}x, SL = {pos['stop_loss']:.2f}, TP = {pos['take_profit']:.2f})\n"
         )
-        if recommendation:
-            msg += f"   {recommendation}\n"
     await update.message.reply_text(msg)
 
 async def delete_position(update: Update, context: CallbackContext):
-    """Выводит список позиций и просит ввести номер для удаления"""
     from config import load_positions
     positions = load_positions()
     if not positions:
@@ -278,7 +246,6 @@ async def delete_position(update: Update, context: CallbackContext):
     await update.message.reply_text(msg)
 
 async def confirm_delete_position(update: Update, context: CallbackContext):
-    """Удаляет позицию по номеру, введённому пользователем"""
     from config import load_positions, save_positions
     try:
         index = int(update.message.text.strip())
@@ -295,7 +262,6 @@ async def confirm_delete_position(update: Update, context: CallbackContext):
     context.user_data["awaiting_delete"] = False
 
 async def handle_text(update: Update, context: CallbackContext):
-    """Обрабатывает входящие текстовые сообщения по контексту"""
     chat_id = update.message.chat_id
     if context.user_data.get("awaiting_balance"):
         await set_user_balance(update, context)
@@ -315,7 +281,6 @@ async def handle_text(update: Update, context: CallbackContext):
             await set_position_entry(update, context)
 
 def run_telegram_bot():
-    """Запускает Telegram-бот в блокирующем режиме с новым event loop."""
     from telegram.ext import Application
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
