@@ -7,7 +7,7 @@ API_SECRET = "lBzb7KCa9iUxWinn1zjUnkuvo9nIScQ6im1OKcTeZDvrlX3gfyzHGgDrtzBlalyx"
 TELEGRAM_TOKEN = "7937694627:AAGnQsGktQwqZJn71meatf0bZPa-DJxTmgo"
 TELEGRAM_CHAT_ID = "785878245"
 
-# Добавлены монеты: SOLUSDT, XRPUSDT, LTCUSDT
+# Добавлены монеты, по которым можно торговать
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "LTCUSDT"]
 
 # Параметры риск-менеджмента
@@ -90,3 +90,19 @@ def calc_sl_tp(side, entry):
         stop_loss = entry * (1 + STOP_LOSS_PERCENT / 100)
         take_profit = entry * (1 - TAKE_PROFIT_PERCENT / 100)
     return stop_loss, take_profit
+
+# --- Новая функциональность: выбор торгового режима ---
+TRADING_MODE_FILE = "trading_mode.txt"
+
+def get_trading_mode():
+    if os.path.exists(TRADING_MODE_FILE):
+        with open(TRADING_MODE_FILE, "r") as f:
+            mode = f.read().strip()
+        if mode in ["long", "scalp"]:
+            return mode
+    return "long"
+
+def set_trading_mode(mode):
+    if mode in ["long", "scalp"]:
+        with open(TRADING_MODE_FILE, "w") as f:
+            f.write(mode)

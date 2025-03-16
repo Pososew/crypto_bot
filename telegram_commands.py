@@ -6,13 +6,13 @@ from config import (
     get_balance, set_balance,
     get_signals_history, get_trades_history,
     save_trade, enable_signals,
-    load_positions, save_positions, calc_sl_tp
+    load_positions, save_positions, calc_sl_tp, set_trading_mode, get_trading_mode
 )
 from binance.client import Client
 import pandas as pd
 import ta
 
-# Словари для отслеживания состояний
+# Состояния для сделок и создания позиций
 user_trade_mode = {}         # Для сделок (прибыль/убыток)
 position_creation = {}       # Для создания позиции
 
@@ -30,9 +30,40 @@ def get_rsi_for_coin(coin):
     rsi = ta.momentum.RSIIndicator(df['close'], window=14).rsi().iloc[-1]
     return rsi
 
+# Команда для установки торгового режима
+async def set_mode(update: Update, context: CallbackContext):
+    keyboard = [["Дневной режим", "Скальпинг"]]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    await update.message.reply_text("Выберите торговый режим:", reply_markup=reply_markup)
+
+# Команда для просмотра текущего торгового режима
+async def get_mode(update: Update, context: CallbackContext):
+    from config import get_trading_mode
+    mode = get_trading_mode()
+    await update.message.reply_text(f"Текущий торговый режим: {mode}")
+
+async def choose_mode(update: Update, context: CallbackContext):
+    mode_text = update.message.text.strip().lower()
+    from config import set_trading_mode
+    if "скальп" in mode_text:
+        set_trading_mode("scalp")
+        response = "Торговый режим установлен на скальпинг (20-30 минут)."
+    else:
+        set_trading_mode("long")
+        response = "Торговый режим установлен на дневной (1-2 дня)."
+    main_keyboard = [
+        ["🚀 Установить баланс", "💰 Посмотреть баланс"],
+        ["📊 История сигналов", "📜 История сделок"],
+        ["✅ Добавить прибыльную сделку", "❌ Добавить убыточную сделку"],
+        ["➕ Добавить позицию", "📈 Мои позиции"],
+        ["/setmode", "/getmode"],
+        ["❌ Удалить позицию"]
+    ]
+    reply_markup = ReplyKeyboardMarkup(main_keyboard, resize_keyboard=True)
+    await update.message.reply_text(response, reply_markup=reply_markup)
+
 async def start(update: Update, context: CallbackContext):
-    """Команда /start: приветствие, активация сигналов и инструкции"""
-    enable_signals()  # Активируем сигналы
+    enable_signals()
     instructions = (
         "Привет! Я криптобот для поиска торговых сигналов.\n\n"
         "Доступные действия:\n"
@@ -40,10 +71,12 @@ async def start(update: Update, context: CallbackContext):
         " • 💰 'Посмотреть баланс' – узнайте текущий баланс.\n"
         " • 📊 'История сигналов' – последние 10 сигналов.\n"
         " • 📜 'История сделок' – последние 10 сделок.\n"
-        " • ✅ 'Добавить прибыльную сделку' или ❌ 'Добавить убыточную сделку' – обновите баланс сделкой.\n"
-        " • ➕ 'Добавить позицию' – сообщите о входе в сделку (монета, BUY/SELL, плечо, цена входа).\n"
+        " • ✅ 'Добавить прибыльную сделку' / ❌ 'Добавить убыточную сделку' – обновите баланс сделкой.\n"
+        " • ➕ 'Добавить позицию' – введите монету, направление, плечо, цену входа.\n"
         " • 📈 'Мои позиции' – список всех позиций с процентным изменением от цены входа.\n"
-        " • ❌ 'Удалить позицию' – удалите позицию по номеру.\n\n"
+        " • ❌ 'Удалить позицию' – удалите позицию по номеру.\n"
+        " • ⚙️ /setmode – выбрать торговый режим.\n"
+        " • ⚙️ /getmode – посмотреть текущий торговый режим.\n\n"
         "Следуйте подсказкам, удачи!"
     )
     keyboard = [
@@ -51,6 +84,7 @@ async def start(update: Update, context: CallbackContext):
         ["📊 История сигналов", "📜 История сделок"],
         ["✅ Добавить прибыльную сделку", "❌ Добавить убыточную сделку"],
         ["➕ Добавить позицию", "📈 Мои позиции"],
+        ["/setmode", "/getmode"],
         ["❌ Удалить позицию"]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -58,7 +92,7 @@ async def start(update: Update, context: CallbackContext):
 
 async def ask_balance(update: Update, context: CallbackContext):
     context.user_data["awaiting_balance"] = True
-    await update.message.reply_text("💵 Введите сумму баланса на сегодня (в USDT):")
+    await update.message.reply_text("💵 Введите сумму баланса (в USDT):")
 
 async def set_user_balance(update: Update, context: CallbackContext):
     try:
@@ -123,7 +157,8 @@ async def save_user_trade(update: Update, context: CallbackContext):
         await update.message.reply_text("⚠️ Введите корректную сумму!")
 
 # ==== Работа с позициями ====
-# При добавлении позиции проверяем, если по монете уже есть открытая позиция
+position_creation = {}
+
 async def add_position(update: Update, context: CallbackContext):
     chat_id = update.message.chat_id
     position_creation[chat_id] = {"step": 1}
@@ -141,7 +176,6 @@ async def set_position_coin(update: Update, context: CallbackContext):
             if chat_id in position_creation:
                 del position_creation[chat_id]
             return
-    # Если позиции нет, продолжаем процесс создания
     position_creation[chat_id] = {"step": 2, "coin": coin}
     await update.message.reply_text("Введите направление (BUY или SELL):")
 
@@ -261,6 +295,37 @@ async def confirm_delete_position(update: Update, context: CallbackContext):
         await update.message.reply_text(f"✅ Позиция {pos['coin']} {pos['side']} по {pos['entry']:.2f} удалена.")
     context.user_data["awaiting_delete"] = False
 
+# Команды для установки и получения торгового режима
+async def setmode_command(update: Update, context: CallbackContext):
+    keyboard = [["Дневной режим", "Скальпинг"]]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    await update.message.reply_text("Выберите торговый режим:", reply_markup=reply_markup)
+
+async def getmode_command(update: Update, context: CallbackContext):
+    from config import get_trading_mode
+    mode = get_trading_mode()
+    await update.message.reply_text(f"Текущий торговый режим: {mode}")
+
+async def choose_mode(update: Update, context: CallbackContext):
+    mode_text = update.message.text.strip().lower()
+    from config import set_trading_mode
+    if "скальп" in mode_text:
+        set_trading_mode("scalp")
+        response = "Торговый режим установлен на скальпинг (20-30 минут)."
+    else:
+        set_trading_mode("long")
+        response = "Торговый режим установлен на дневной (1-2 дня)."
+    main_keyboard = [
+        ["🚀 Установить баланс", "💰 Посмотреть баланс"],
+        ["📊 История сигналов", "📜 История сделок"],
+        ["✅ Добавить прибыльную сделку", "❌ Добавить убыточную сделку"],
+        ["➕ Добавить позицию", "📈 Мои позиции"],
+        ["/setmode", "/getmode"],
+        ["❌ Удалить позицию"]
+    ]
+    reply_markup = ReplyKeyboardMarkup(main_keyboard, resize_keyboard=True)
+    await update.message.reply_text(response, reply_markup=reply_markup)
+
 async def handle_text(update: Update, context: CallbackContext):
     chat_id = update.message.chat_id
     if context.user_data.get("awaiting_balance"):
@@ -279,12 +344,17 @@ async def handle_text(update: Update, context: CallbackContext):
             await set_position_leverage(update, context)
         elif step == 4:
             await set_position_entry(update, context)
+    elif update.message.text.strip() in ["Дневной режим", "Скальпинг"]:
+        await choose_mode(update, context)
 
 def run_telegram_bot():
     from telegram.ext import Application
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("setmode", setmode_command))
+    app.add_handler(CommandHandler("getmode", getmode_command))
+    app.add_handler(MessageHandler(filters.Regex("^(Дневной режим|Скальпинг)$"), choose_mode))
     app.add_handler(MessageHandler(filters.Regex("🚀 Установить баланс"), ask_balance))
     app.add_handler(MessageHandler(filters.Regex("💰 Посмотреть баланс"), show_balance))
     app.add_handler(MessageHandler(filters.Regex("📊 История сигналов"), show_signals))
