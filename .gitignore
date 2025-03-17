@@ -1,0 +1,10 @@
+venv/
+__pycache__/
+*.pyc
+.env
+balance.txt
+signals.txt
+trades.txt
+signals_enabled.txt
+open_positions.json
+trading_mode.txt
