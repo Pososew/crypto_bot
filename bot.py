@@ -7,7 +7,8 @@ from config import (
     API_KEY, API_SECRET, SYMBOLS,
     save_signal, is_signals_enabled,
     STOP_LOSS_PERCENT, TAKE_PROFIT_PERCENT,
-    load_positions, get_trading_mode
+    load_positions, get_trading_mode,
+    calc_sl_tp 
 )
 from telegram_bot import send_telegram_message
 from telegram_commands import run_telegram_bot
@@ -37,6 +38,10 @@ def apply_indicators(df):
     return df
 
 def check_trade_signal_extended(df):
+    """
+    Анализ входного сигнала по 1m свечам:
+      - Если минимум 3 из 6 условий совпадают, возвращаем сигнал BUY или SELL.
+    """
     latest = df.iloc[-1]
     rsi_buy = latest['RSI'] < 30
     rsi_sell = latest['RSI'] > 70
@@ -96,63 +101,58 @@ if __name__ == "__main__":
     
     # Интервал проверки выставляем 5 минут для обоих режимов
     interval_seconds = 300
-    # Определяем торговый режим (но для сигнала закрытия позиции время проверки всегда 5 минут)
+    # Определяем торговый режим: если скальпинг – используем 15m свечи для выхода, иначе 1h
     from config import get_trading_mode
     mode = get_trading_mode()
     if mode == "scalp":
-        timeframe = "15m"
+        exit_timeframe = "15m"
     else:
-        timeframe = "1h"
-    print(f"DEBUG: Торговый режим: {mode}. Анализ по таймфрейму {timeframe}. Интервал: {interval_seconds} секунд.")
+        exit_timeframe = "1h"
+    print(f"DEBUG: Торговый режим: {mode}. Для входа анализ по 1m, для выхода по {exit_timeframe}. Интервал: {interval_seconds} секунд.")
     
     while True:
-        print("DEBUG: Начало цикла проверки позиций...")
-        positions = load_positions()
-        # Если нет ни одной открытой позиции для всех монет
-        if not positions:
-            send_telegram_message("Сейчас нет хороших входов в сделку 😊")
-            print("Нет открытых позиций на всех монетах.")
-        else:
-            # Выводим анализ только по первой найденной открытой позиции
-            found = False
-            for symbol in SYMBOLS:
-                open_pos = None
-                for pos in positions:
-                    if pos["coin"].upper() == symbol.upper():
-                        open_pos = pos
-                        break
-                if open_pos:
-                    found = True
-                    side = open_pos["side"].upper()
-                    df_time = get_timeframe_data(symbol, timeframe, lookback=2)
-                    last_candle = df_time.iloc[-1]
-                    open_price = last_candle['open']
-                    close_price = last_candle['close']
-                    diff = (close_price - open_price) / open_price
-                    reversal = False
-                    if side == "SELL" and diff > 0.003:
-                        reversal = True
-                        msg = f"Сейчас лучше закрыть позицию, так как цена развернулась вверх на монете {symbol}."
-                    elif side == "BUY" and diff < -0.003:
-                        reversal = True
-                        msg = f"Сейчас лучше закрыть позицию, так как цена развернулась вниз на монете {symbol}."
-                    # Дополнительная проверка: анализ максимумов/минимумов за последние 6 свечей
-                    df_recent = get_timeframe_data(symbol, timeframe, lookback=6)
-                    if side == "BUY":
-                        max_high = df_recent['high'].max()
-                        if (max_high - close_price) / max_high >= 0.003:
-                            reversal = True
-                            msg = f"Ваша позиция на {symbol} достигла своего максимума. Советую закрыть позицию."
-                    else:
-                        min_low = df_recent['low'].min()
-                        if (close_price - min_low) / min_low >= 0.003:
-                            reversal = True
-                            msg = f"Ваша позиция на {symbol} достигла своего минимума. Советую закрыть позицию."
-                    if reversal:
-                        send_telegram_message(msg)
-                        print(msg)
-                    else:
-                        print(f"Позиция по {symbol} стабильна.")
-                    break  # Выводим анализ только по первой найденной позиции
+        print("DEBUG: Начало цикла анализа рынка...")
+        signals = []
+        for symbol in SYMBOLS:
+            positions = load_positions()
+            open_pos = None
+            for pos in positions:
+                if pos["coin"].upper() == symbol.upper():
+                    open_pos = pos
+                    break
+            if open_pos:
+                # Анализируем открытую позицию для выхода
+                side = open_pos["side"].upper()
+                df_exit = get_timeframe_data(symbol, exit_timeframe, lookback=2)
+                last_candle = df_exit.iloc[-1]
+                open_price = last_candle['open']
+                close_price = last_candle['close']
+                diff = (close_price - open_price) / open_price
+                reversal = False
+                if side == "SELL" and diff > 0.003:
+                    reversal = True
+                    signals.append(f"Сейчас лучше закрыть позицию на {symbol}, так как цена развернулась вверх.")
+                elif side == "BUY" and diff < -0.003:
+                    reversal = True
+                    signals.append(f"Сейчас лучше закрыть позицию на {symbol}, так как цена развернулась вниз.")
+                else:
+                    signals.append(f"Позиция на {symbol} стабильна.")
+            else:
+                # Анализируем входной сигнал по 1m данным
+                df_entry = get_data(symbol, interval="1m", lookback=100)
+                df_entry = apply_indicators(df_entry)
+                signal = check_trade_signal_extended(df_entry)
+                if signal:
+                    entry_price = df_entry.iloc[-1]['close']
+                    stop_loss, take_profit = calc_sl_tp(signal, entry_price)
+                    signals.append(
+                        f"Вход: {symbol} – {signal} сигнал.\nЦена входа: {entry_price:.2f}, SL: {stop_loss:.2f}, TP: {take_profit:.2f}"
+                    )
+                else:
+                    signals.append(f"На монету {symbol} нет хороших входов в сделку.")
+        aggregated_message = "\n".join(signals)
+        send_telegram_message(aggregated_message)
+        print("Отправлено сообщение:")
+        print(aggregated_message)
         time.sleep(interval_seconds)
         print("Ping:", client.ping())

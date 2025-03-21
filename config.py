@@ -8,7 +8,7 @@ TELEGRAM_TOKEN = "7937694627:AAGnQsGktQwqZJn71meatf0bZPa-DJxTmgo"
 TELEGRAM_CHAT_ID = "785878245"
 
 # Добавлены монеты, по которым можно торговать
-SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "LTCUSDT"]
+SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "LTCUSDT", "AAVEUSDT", "DOTUSDT", "LINKUSDT"]
 
 # Параметры риск-менеджмента
 STOP_LOSS_PERCENT = 2      # 2%

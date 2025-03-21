@@ -1,1 +1,10 @@
-[]
+[
+  {
+    "coin": "SOLUSDT",
+    "side": "SELL",
+    "entry": 130.64,
+    "stop_loss": 133.25279999999998,
+    "take_profit": 122.80159999999998,
+    "leverage": 10.0
+  }
+]
