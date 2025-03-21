@@ -1,20 +1,22 @@
 import os
 import json
+from dotenv import load_dotenv
 
-API_KEY = "hRCKAlC4UbJvIrPUZ7XBX7aS6BajBfzumN5WRUnsfh6T8spehtGkuB4JDNiD7eCG"
-API_SECRET = "lBzb7KCa9iUxWinn1zjUnkuvo9nIScQ6im1OKcTeZDvrlX3gfyzHGgDrtzBlalyx"
+# Загрузка .env
+load_dotenv()
 
-TELEGRAM_TOKEN = "7937694627:AAGnQsGktQwqZJn71meatf0bZPa-DJxTmgo"
-TELEGRAM_CHAT_ID = "785878245"
+STOP_LOSS_PERCENT = 2
+TAKE_PROFIT_PERCENT = 6
 
-# Добавлены монеты, по которым можно торговать
+# Читаем переменные окружения
+API_KEY = os.getenv("API_KEY")
+API_SECRET = os.getenv("API_SECRET")
+
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "LTCUSDT", "AAVEUSDT", "DOTUSDT", "LINKUSDT"]
 
-# Параметры риск-менеджмента
-STOP_LOSS_PERCENT = 2      # 2%
-TAKE_PROFIT_PERCENT = 6    # 6%
-
-# Файлы хранения данных
 BALANCE_FILE = "balance.txt"
 SIGNALS_FILE = "signals.txt"
 TRADES_FILE = "trades.txt"
