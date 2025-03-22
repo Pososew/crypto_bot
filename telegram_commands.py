@@ -30,14 +30,13 @@ def get_rsi_for_coin(coin):
     rsi = ta.momentum.RSIIndicator(df['close'], window=14).rsi().iloc[-1]
     return rsi
 
-# Команда для установки торгового режима
-async def set_mode(update: Update, context: CallbackContext):
+# Команды для установки и получения торгового режима
+async def setmode_command(update: Update, context: CallbackContext):
     keyboard = [["Дневной режим", "Скальпинг"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await update.message.reply_text("Выберите торговый режим:", reply_markup=reply_markup)
 
-# Команда для просмотра текущего торгового режима
-async def get_mode(update: Update, context: CallbackContext):
+async def getmode_command(update: Update, context: CallbackContext):
     from config import get_trading_mode
     mode = get_trading_mode()
     await update.message.reply_text(f"Текущий торговый режим: {mode}")
@@ -72,7 +71,7 @@ async def start(update: Update, context: CallbackContext):
         " • 📊 'История сигналов' – последние 10 сигналов.\n"
         " • 📜 'История сделок' – последние 10 сделок.\n"
         " • ✅ 'Добавить прибыльную сделку' / ❌ 'Добавить убыточную сделку' – обновите баланс сделкой.\n"
-        " • ➕ 'Добавить позицию' – введите монету, направление, плечо, цену входа.\n"
+        " • ➕ 'Добавить позицию' – введите монету, направление, плечо, сумму и цену входа.\n"
         " • 📈 'Мои позиции' – список всех позиций с процентным изменением от цены входа.\n"
         " • ❌ 'Удалить позицию' – удалите позицию по номеру.\n"
         " • ⚙️ /setmode – выбрать торговый режим.\n"
@@ -167,7 +166,6 @@ async def add_position(update: Update, context: CallbackContext):
 async def set_position_coin(update: Update, context: CallbackContext):
     chat_id = update.message.chat_id
     coin = update.message.text.strip().upper()
-    # Проверяем, есть ли уже открытая позиция по этой монете
     from config import load_positions
     positions = load_positions()
     for pos in positions:
@@ -199,18 +197,29 @@ async def set_position_leverage(update: Update, context: CallbackContext):
             return
         position_creation[chat_id]["leverage"] = leverage
         position_creation[chat_id]["step"] = 4
-        await update.message.reply_text("Введите цену входа (например: 100):")
+        await update.message.reply_text("Введите сумму инвестиций для этой позиции (например: 50):")
     except ValueError:
         await update.message.reply_text("⚠️ Введите корректное число для плеча!")
 
+async def set_position_stake(update: Update, context: CallbackContext):
+    chat_id = update.message.chat_id
+    try:
+        stake = float(update.message.text.strip())
+        position_creation[chat_id]["stake"] = stake
+        position_creation[chat_id]["step"] = 5
+        await update.message.reply_text("Введите цену входа (например: 100):")
+    except ValueError:
+        await update.message.reply_text("⚠️ Введите корректную сумму инвестиций!")
+
 async def set_position_entry(update: Update, context: CallbackContext):
-    from config import load_positions, save_positions
+    from config import load_positions, save_positions, calc_sl_tp
     chat_id = update.message.chat_id
     try:
         entry_price = float(update.message.text)
         coin = position_creation[chat_id]["coin"]
         side = position_creation[chat_id]["side"]
         leverage = position_creation[chat_id].get("leverage", 0)
+        stake = position_creation[chat_id].get("stake", 0)
         stop_loss, take_profit = calc_sl_tp(side, entry_price)
         positions = load_positions()
         new_pos = {
@@ -219,13 +228,15 @@ async def set_position_entry(update: Update, context: CallbackContext):
             "entry": entry_price,
             "stop_loss": stop_loss,
             "take_profit": take_profit,
-            "leverage": leverage
+            "leverage": leverage,
+            "stake": stake
         }
         positions.append(new_pos)
         save_positions(positions)
         msg = (
             f"✅ Позиция добавлена:\nМонета: {coin}\nНаправление: {side}\nЦена входа: {entry_price:.2f}\n"
-            f"Плечо: {leverage}x\nСтоп‑лосс: {stop_loss:.2f}\nТейк‑профит: {take_profit:.2f}"
+            f"Плечо: {leverage}x, Сумма: {stake:.2f} USDT\n"
+            f"Стоп‑лосс: {stop_loss:.2f}\nТейк‑профит: {take_profit:.2f}"
         )
         await update.message.reply_text(msg)
     except ValueError:
@@ -247,6 +258,7 @@ async def show_positions(update: Update, context: CallbackContext):
         coin = pos["coin"]
         side = pos["side"].upper()
         entry = pos["entry"]
+        stake = pos.get("stake", 0)
         try:
             ticker = client.get_symbol_ticker(symbol=coin)
             current_price = float(ticker["price"])
@@ -263,7 +275,7 @@ async def show_positions(update: Update, context: CallbackContext):
             f"   Цена входа: {entry:.2f}\n"
             f"   Текущая цена: {current_price:.2f}\n"
             f"   Изменение от входа: {status}\n"
-            f"   (Плечо: {pos.get('leverage', 0)}x, SL = {pos['stop_loss']:.2f}, TP = {pos['take_profit']:.2f})\n"
+            f"   (Плечо: {pos.get('leverage', 0)}x, Сумма: {stake:.2f} USDT, SL = {pos['stop_loss']:.2f}, TP = {pos['take_profit']:.2f})\n"
         )
     await update.message.reply_text(msg)
 
@@ -343,9 +355,23 @@ async def handle_text(update: Update, context: CallbackContext):
         elif step == 3:
             await set_position_leverage(update, context)
         elif step == 4:
+            # Новый шаг: ввести сумму инвестиций (stake)
+            await set_position_stake(update, context)
+        elif step == 5:
             await set_position_entry(update, context)
     elif update.message.text.strip() in ["Дневной режим", "Скальпинг"]:
         await choose_mode(update, context)
+
+# Новая функция для установки стейка
+async def set_position_stake(update: Update, context: CallbackContext):
+    chat_id = update.message.chat_id
+    try:
+        stake = float(update.message.text.strip())
+        position_creation[chat_id]["stake"] = stake
+        position_creation[chat_id]["step"] = 5
+        await update.message.reply_text("Введите цену входа (например: 100):")
+    except ValueError:
+        await update.message.reply_text("⚠️ Введите корректную сумму инвестиций!")
 
 def run_telegram_bot():
     from telegram.ext import Application

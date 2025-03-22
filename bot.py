@@ -7,8 +7,7 @@ from config import (
     API_KEY, API_SECRET, SYMBOLS,
     save_signal, is_signals_enabled,
     STOP_LOSS_PERCENT, TAKE_PROFIT_PERCENT,
-    load_positions, get_trading_mode,
-    calc_sl_tp 
+    load_positions, get_trading_mode, calc_sl_tp, set_balance, get_balance
 )
 from telegram_bot import send_telegram_message
 from telegram_commands import run_telegram_bot
@@ -38,10 +37,6 @@ def apply_indicators(df):
     return df
 
 def check_trade_signal_extended(df):
-    """
-    Анализ входного сигнала по 1m свечам:
-      - Если минимум 3 из 6 условий совпадают, возвращаем сигнал BUY или SELL.
-    """
     latest = df.iloc[-1]
     rsi_buy = latest['RSI'] < 30
     rsi_sell = latest['RSI'] > 70
@@ -99,9 +94,9 @@ if __name__ == "__main__":
     telegram_process = multiprocessing.Process(target=start_telegram_bot_in_process)
     telegram_process.start()
     
-    # Интервал проверки выставляем 5 минут для обоих режимов
+    # Интервал проверки выставляем 5 минут
     interval_seconds = 300
-    # Определяем торговый режим: если скальпинг – используем 15m свечи для выхода, иначе 1h
+    # Определяем торговый режим для выхода: 15m для скальпинга, 1h для дневного режима
     from config import get_trading_mode
     mode = get_trading_mode()
     if mode == "scalp":
@@ -113,6 +108,7 @@ if __name__ == "__main__":
     while True:
         print("DEBUG: Начало цикла анализа рынка...")
         signals = []
+        # Для каждого символа
         for symbol in SYMBOLS:
             positions = load_positions()
             open_pos = None
@@ -121,7 +117,7 @@ if __name__ == "__main__":
                     open_pos = pos
                     break
             if open_pos:
-                # Анализируем открытую позицию для выхода
+                # Если позиция открыта, анализируем выходной сигнал
                 side = open_pos["side"].upper()
                 df_exit = get_timeframe_data(symbol, exit_timeframe, lookback=2)
                 last_candle = df_exit.iloc[-1]
@@ -131,14 +127,42 @@ if __name__ == "__main__":
                 reversal = False
                 if side == "SELL" and diff > 0.003:
                     reversal = True
-                    signals.append(f"Сейчас лучше закрыть позицию на {symbol}, так как цена развернулась вверх.")
                 elif side == "BUY" and diff < -0.003:
                     reversal = True
-                    signals.append(f"Сейчас лучше закрыть позицию на {symbol}, так как цена развернулась вниз.")
+                # Дополнительная проверка за последние 6 свечей
+                df_recent = get_timeframe_data(symbol, exit_timeframe, lookback=6)
+                if side == "BUY":
+                    max_high = df_recent['high'].max()
+                    if (max_high - close_price) / max_high >= 0.003:
+                        reversal = True
+                else:
+                    min_low = df_recent['low'].min()
+                    if (close_price - min_low) / min_low >= 0.003:
+                        reversal = True
+                if reversal:
+                    # Рассчитываем прибыль/убыток с учетом стейка и плеча
+                    stake = open_pos.get("stake", 0)
+                    entry = open_pos["entry"]
+                    leverage = open_pos.get("leverage", 1)  # если плечо не задано, считаем 1
+                    if side == "BUY":
+                        pct = (close_price - entry) / entry  # прирост
+                    else:
+                        pct = (entry - close_price) / entry  # прирост для шорта
+                    profit_loss = stake * pct * leverage
+                    current_balance = get_balance() or 0
+                    new_balance = current_balance + profit_loss
+                    set_balance(new_balance)
+                    # Удаляем позицию после закрытия
+                    positions = load_positions()
+                    positions = [p for p in positions if p["coin"].upper() != symbol.upper()]
+                    from config import save_positions
+                    save_positions(positions)
+                    msg = f"Позиция на {symbol} закрыта. Прибыль/убыток: {profit_loss:+.2f} USDT. Новый баланс: {new_balance:.2f} USDT."
+                    signals.append(msg)
                 else:
                     signals.append(f"Позиция на {symbol} стабильна.")
             else:
-                # Анализируем входной сигнал по 1m данным
+                # Если позиции нет, анализируем входной сигнал
                 df_entry = get_data(symbol, interval="1m", lookback=100)
                 df_entry = apply_indicators(df_entry)
                 signal = check_trade_signal_extended(df_entry)
