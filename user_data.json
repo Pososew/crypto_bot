@@ -1,0 +1,32 @@
+{
+  "balances": {
+    "785878245": 100.0,
+    "1377906381": 100.0
+  },
+  "positions": {
+    "785878245": [
+      {
+        "coin": "SOLUSDT",
+        "side": "SELL",
+        "entry": 130.52,
+        "stop_loss": 133.1304,
+        "take_profit": 122.6888,
+        "leverage": 10.0,
+        "stake": 100.0
+      }
+    ],
+    "1377906381": [
+      {
+        "coin": "SOLUSDT",
+        "side": "SELL",
+        "entry": 130.52,
+        "stop_loss": 133.1304,
+        "take_profit": 122.6888,
+        "leverage": 10.0,
+        "stake": 100.0
+      }
+    ]
+  },
+  "trades": {},
+  "trading_modes": {}
+}

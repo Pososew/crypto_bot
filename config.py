@@ -2,49 +2,79 @@ import os
 import json
 from dotenv import load_dotenv
 
-# Загрузка .env
-load_dotenv()
+load_dotenv()  # Загружает переменные из .env, если он существует
 
-STOP_LOSS_PERCENT = 2
-TAKE_PROFIT_PERCENT = 6
-
-# Читаем переменные окружения
+# Загружаем секреты из окружения
 API_KEY = os.getenv("API_KEY")
 API_SECRET = os.getenv("API_SECRET")
-
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+# В многопользовательском режиме TELEGRAM_CHAT_ID не используется
 
-SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "LTCUSDT", "AAVEUSDT", "DOTUSDT", "LINKUSDT"]
+# Список монет для торговли
+SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "LTCUSDT", "DOTUSDT", "AAVEUSDT", "LINKUSDT"]
 
-BALANCE_FILE = "balance.txt"
-SIGNALS_FILE = "signals.txt"
-TRADES_FILE = "trades.txt"
-SIGNALS_ENABLED_FILE = "signals_enabled.txt"  # Флаг активации сигналов
-OPEN_POSITIONS_FILE = "open_positions.json"
+# Параметры риск-менеджмента
+STOP_LOSS_PERCENT = 2      # 2%
+TAKE_PROFIT_PERCENT = 6    # 6%
 
-def get_balance():
-    if os.path.exists(BALANCE_FILE):
-        with open(BALANCE_FILE, "r") as f:
+# Файл для хранения данных пользователей
+USER_DATA_FILE = "user_data.json"
+
+def load_user_data():
+    if os.path.exists(USER_DATA_FILE):
+        with open(USER_DATA_FILE, "r") as f:
             try:
-                return float(f.read().strip())
-            except ValueError:
-                return None
-    return None
+                data = json.load(f)
+            except Exception:
+                data = {}
+    else:
+        data = {}
+    # Обеспечиваем наличие необходимых разделов
+    if "balances" not in data:
+        data["balances"] = {}
+    if "positions" not in data:
+        data["positions"] = {}
+    if "trades" not in data:
+        data["trades"] = {}
+    if "trading_modes" not in data:
+        data["trading_modes"] = {}
+    return data
 
-def set_balance(amount):
-    with open(BALANCE_FILE, "w") as f:
-        f.write(str(amount))
+def save_user_data(data):
+    with open(USER_DATA_FILE, "w") as f:
+        json.dump(data, f, indent=2)
 
-def save_signal(signal):
-    with open(SIGNALS_FILE, "a") as f:
-        f.write(signal + "\n")
+def get_balance(chat_id):
+    data = load_user_data()
+    return data["balances"].get(str(chat_id), 0)
 
-def save_trade(trade):
-    with open(TRADES_FILE, "a") as f:
-        f.write(trade + "\n")
+def set_balance(chat_id, amount):
+    data = load_user_data()
+    data["balances"][str(chat_id)] = amount
+    save_user_data(data)
+
+def load_positions(chat_id):
+    data = load_user_data()
+    return data["positions"].get(str(chat_id), [])
+
+def save_positions(chat_id, positions):
+    data = load_user_data()
+    data["positions"][str(chat_id)] = positions
+    save_user_data(data)
+
+def load_trades(chat_id):
+    data = load_user_data()
+    return data["trades"].get(str(chat_id), [])
+
+def save_trade(chat_id, trade):
+    data = load_user_data()
+    if str(chat_id) not in data["trades"]:
+        data["trades"][str(chat_id)] = []
+    data["trades"][str(chat_id)].append(trade)
+    save_user_data(data)
 
 def get_signals_history():
+    SIGNALS_FILE = "signals.txt"
     if os.path.exists(SIGNALS_FILE):
         with open(SIGNALS_FILE, "r") as f:
             lines = f.readlines()
@@ -52,37 +82,20 @@ def get_signals_history():
             return "".join(lines[-10:])
     return "История сигналов пуста."
 
-def get_trades_history():
-    if os.path.exists(TRADES_FILE):
-        with open(TRADES_FILE, "r") as f:
-            lines = f.readlines()
-        if lines:
-            return "".join(lines[-10:])
+def get_trades_history(chat_id):
+    trades = load_trades(chat_id)
+    if trades:
+        return "\n".join(trades[-10:])
     return "История сделок пуста."
 
 def enable_signals():
+    SIGNALS_ENABLED_FILE = "signals_enabled.txt"
     with open(SIGNALS_ENABLED_FILE, "w") as f:
         f.write("1")
 
 def is_signals_enabled():
+    SIGNALS_ENABLED_FILE = "signals_enabled.txt"
     return os.path.exists(SIGNALS_ENABLED_FILE)
-
-def load_positions():
-    if os.path.exists(OPEN_POSITIONS_FILE):
-        with open(OPEN_POSITIONS_FILE, "r") as f:
-            try:
-                positions = json.load(f)
-                if isinstance(positions, list):
-                    return positions
-                else:
-                    return []
-            except:
-                return []
-    return []
-
-def save_positions(positions):
-    with open(OPEN_POSITIONS_FILE, "w") as f:
-        json.dump(positions, f, indent=2)
 
 def calc_sl_tp(side, entry):
     if side.upper() == "BUY":
@@ -93,18 +106,13 @@ def calc_sl_tp(side, entry):
         take_profit = entry * (1 - TAKE_PROFIT_PERCENT / 100)
     return stop_loss, take_profit
 
-# --- Новая функциональность: выбор торгового режима ---
-TRADING_MODE_FILE = "trading_mode.txt"
+def get_trading_mode(chat_id):
+    data = load_user_data()
+    return data["trading_modes"].get(str(chat_id), "long")
 
-def get_trading_mode():
-    if os.path.exists(TRADING_MODE_FILE):
-        with open(TRADING_MODE_FILE, "r") as f:
-            mode = f.read().strip()
-        if mode in ["long", "scalp"]:
-            return mode
-    return "long"
-
-def set_trading_mode(mode):
-    if mode in ["long", "scalp"]:
-        with open(TRADING_MODE_FILE, "w") as f:
-            f.write(mode)
+def set_trading_mode(chat_id, mode):
+    if mode not in ["long", "scalp"]:
+        return
+    data = load_user_data()
+    data["trading_modes"][str(chat_id)] = mode
+    save_user_data(data)

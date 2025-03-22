@@ -12,11 +12,10 @@ from binance.client import Client
 import pandas as pd
 import ta
 
-# Состояния для сделок и создания позиций
-user_trade_mode = {}         # Для сделок (прибыль/убыток)
-position_creation = {}       # Для создания позиции
+# Локальные словари для отслеживания состояний по chat_id
+user_trade_mode = {}
+position_creation = {}
 
-# Функция для получения RSI для монеты (использует последние 100 свечей)
 def get_rsi_for_coin(coin):
     from config import API_KEY, API_SECRET
     client = Client(API_KEY, API_SECRET)
@@ -30,25 +29,24 @@ def get_rsi_for_coin(coin):
     rsi = ta.momentum.RSIIndicator(df['close'], window=14).rsi().iloc[-1]
     return rsi
 
-# Команды для установки и получения торгового режима
 async def setmode_command(update: Update, context: CallbackContext):
     keyboard = [["Дневной режим", "Скальпинг"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await update.message.reply_text("Выберите торговый режим:", reply_markup=reply_markup)
 
 async def getmode_command(update: Update, context: CallbackContext):
-    from config import get_trading_mode
-    mode = get_trading_mode()
+    chat_id = update.message.chat_id
+    mode = get_trading_mode(chat_id)
     await update.message.reply_text(f"Текущий торговый режим: {mode}")
 
 async def choose_mode(update: Update, context: CallbackContext):
+    chat_id = update.message.chat_id
     mode_text = update.message.text.strip().lower()
-    from config import set_trading_mode
     if "скальп" in mode_text:
-        set_trading_mode("scalp")
+        set_trading_mode(chat_id, "scalp")
         response = "Торговый режим установлен на скальпинг (20-30 минут)."
     else:
-        set_trading_mode("long")
+        set_trading_mode(chat_id, "long")
         response = "Торговый режим установлен на дневной (1-2 дня)."
     main_keyboard = [
         ["🚀 Установить баланс", "💰 Посмотреть баланс"],
@@ -67,12 +65,12 @@ async def start(update: Update, context: CallbackContext):
         "Привет! Я криптобот для поиска торговых сигналов.\n\n"
         "Доступные действия:\n"
         " • 🚀 'Установить баланс' – введите сумму в USDT.\n"
-        " • 💰 'Посмотреть баланс' – узнайте текущий баланс.\n"
+        " • 💰 'Посмотреть баланс' – узнайте ваш текущий баланс.\n"
         " • 📊 'История сигналов' – последние 10 сигналов.\n"
         " • 📜 'История сделок' – последние 10 сделок.\n"
-        " • ✅ 'Добавить прибыльную сделку' / ❌ 'Добавить убыточную сделку' – обновите баланс сделкой.\n"
-        " • ➕ 'Добавить позицию' – введите монету, направление, плечо, сумму и цену входа.\n"
-        " • 📈 'Мои позиции' – список всех позиций с процентным изменением от цены входа.\n"
+        " • ✅ 'Добавить прибыльную сделку' / ❌ 'Добавить убыточную сделку' – внесите сделку для обновления баланса.\n"
+        " • ➕ 'Добавить позицию' – введите монету, направление, плечо, сумму инвестиций и цену входа.\n"
+        " • 📈 'Мои позиции' – список ваших позиций.\n"
         " • ❌ 'Удалить позицию' – удалите позицию по номеру.\n"
         " • ⚙️ /setmode – выбрать торговый режим.\n"
         " • ⚙️ /getmode – посмотреть текущий торговый режим.\n\n"
@@ -96,16 +94,16 @@ async def ask_balance(update: Update, context: CallbackContext):
 async def set_user_balance(update: Update, context: CallbackContext):
     try:
         amount = float(update.message.text)
-        set_balance(amount)
+        set_balance(update.message.chat_id, amount)
         context.user_data["awaiting_balance"] = False
         await update.message.reply_text(f"✅ Баланс установлен: {amount:.2f} USDT")
     except ValueError:
         await update.message.reply_text("⚠️ Введите корректную сумму!")
 
 async def show_balance(update: Update, context: CallbackContext):
-    balance = get_balance()
+    balance = get_balance(update.message.chat_id)
     if balance is not None:
-        await update.message.reply_text(f"💰 Текущий баланс: {balance:.2f} USDT")
+        await update.message.reply_text(f"💰 Ваш текущий баланс: {balance:.2f} USDT")
     else:
         await update.message.reply_text("⚠️ Баланс не установлен.")
 
@@ -114,7 +112,7 @@ async def show_signals(update: Update, context: CallbackContext):
     await update.message.reply_text(f"📊 История сигналов:\n{history}")
 
 async def show_trades(update: Update, context: CallbackContext):
-    history = get_trades_history()
+    history = get_trades_history(update.message.chat_id)
     await update.message.reply_text(f"📜 История сделок:\n{history}")
 
 async def ask_trade(update: Update, context: CallbackContext):
@@ -135,7 +133,7 @@ async def save_user_trade(update: Update, context: CallbackContext):
         return
     try:
         trade_amount = float(update.message.text.strip())
-        current_balance = get_balance()
+        current_balance = get_balance(chat_id)
         if current_balance is None:
             await update.message.reply_text("⚠️ Баланс не установлен!")
             del user_trade_mode[chat_id]
@@ -146,8 +144,8 @@ async def save_user_trade(update: Update, context: CallbackContext):
         else:
             new_balance = current_balance - trade_amount
             trade_type = "УБЫТОК"
-        save_trade(f"{trade_type}: {trade_amount:.2f} USDT")
-        set_balance(new_balance)
+        save_trade(chat_id, f"{trade_type}: {trade_amount:.2f} USDT")
+        set_balance(chat_id, new_balance)
         del user_trade_mode[chat_id]
         await update.message.reply_text(
             f"✅ Сделка записана: {trade_type} {trade_amount:.2f} USDT\nНовый баланс: {new_balance:.2f} USDT"
@@ -167,7 +165,7 @@ async def set_position_coin(update: Update, context: CallbackContext):
     chat_id = update.message.chat_id
     coin = update.message.text.strip().upper()
     from config import load_positions
-    positions = load_positions()
+    positions = load_positions(chat_id)
     for pos in positions:
         if pos.get("coin", "").upper() == coin:
             await update.message.reply_text(f"По монете {coin} у вас уже открыта позиция.")
@@ -221,7 +219,7 @@ async def set_position_entry(update: Update, context: CallbackContext):
         leverage = position_creation[chat_id].get("leverage", 0)
         stake = position_creation[chat_id].get("stake", 0)
         stop_loss, take_profit = calc_sl_tp(side, entry_price)
-        positions = load_positions()
+        positions = load_positions(chat_id)
         new_pos = {
             "coin": coin,
             "side": side,
@@ -232,7 +230,7 @@ async def set_position_entry(update: Update, context: CallbackContext):
             "stake": stake
         }
         positions.append(new_pos)
-        save_positions(positions)
+        save_positions(chat_id, positions)
         msg = (
             f"✅ Позиция добавлена:\nМонета: {coin}\nНаправление: {side}\nЦена входа: {entry_price:.2f}\n"
             f"Плечо: {leverage}x, Сумма: {stake:.2f} USDT\n"
@@ -245,15 +243,15 @@ async def set_position_entry(update: Update, context: CallbackContext):
         del position_creation[chat_id]
 
 async def show_positions(update: Update, context: CallbackContext):
-    from config import load_positions
-    positions = load_positions()
+    chat_id = update.message.chat_id
+    positions = load_positions(chat_id)
     if not positions:
         await update.message.reply_text("Нет открытых позиций.")
         return
     from config import API_KEY, API_SECRET
     from binance.client import Client
     client = Client(API_KEY, API_SECRET)
-    msg = "📈 Мои позиции:\n"
+    msg = "📈 Ваши позиции:\n"
     for i, pos in enumerate(positions, start=1):
         coin = pos["coin"]
         side = pos["side"].upper()
@@ -274,14 +272,14 @@ async def show_positions(update: Update, context: CallbackContext):
             f"{i}. {coin} ({side})\n"
             f"   Цена входа: {entry:.2f}\n"
             f"   Текущая цена: {current_price:.2f}\n"
-            f"   Изменение от входа: {status}\n"
-            f"   (Плечо: {pos.get('leverage', 0)}x, Сумма: {stake:.2f} USDT, SL = {pos['stop_loss']:.2f}, TP = {pos['take_profit']:.2f})\n"
+            f"   Изменение: {status}\n"
+            f"   (Плечо: {pos.get('leverage', 0)}x, Сумма: {stake:.2f} USDT, SL: {pos['stop_loss']:.2f}, TP: {pos['take_profit']:.2f})\n"
         )
     await update.message.reply_text(msg)
 
 async def delete_position(update: Update, context: CallbackContext):
-    from config import load_positions
-    positions = load_positions()
+    chat_id = update.message.chat_id
+    positions = load_positions(chat_id)
     if not positions:
         await update.message.reply_text("Нет открытых позиций для удаления.")
         return
@@ -292,51 +290,20 @@ async def delete_position(update: Update, context: CallbackContext):
     await update.message.reply_text(msg)
 
 async def confirm_delete_position(update: Update, context: CallbackContext):
-    from config import load_positions, save_positions
+    chat_id = update.message.chat_id
     try:
         index = int(update.message.text.strip())
     except ValueError:
         await update.message.reply_text("⚠️ Введите корректный номер позиции!")
         return
-    positions = load_positions()
+    positions = load_positions(chat_id)
     if index < 1 or index > len(positions):
         await update.message.reply_text("⚠️ Позиция с таким номером не найдена!")
     else:
         pos = positions.pop(index - 1)
-        save_positions(positions)
+        save_positions(chat_id, positions)
         await update.message.reply_text(f"✅ Позиция {pos['coin']} {pos['side']} по {pos['entry']:.2f} удалена.")
     context.user_data["awaiting_delete"] = False
-
-# Команды для установки и получения торгового режима
-async def setmode_command(update: Update, context: CallbackContext):
-    keyboard = [["Дневной режим", "Скальпинг"]]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    await update.message.reply_text("Выберите торговый режим:", reply_markup=reply_markup)
-
-async def getmode_command(update: Update, context: CallbackContext):
-    from config import get_trading_mode
-    mode = get_trading_mode()
-    await update.message.reply_text(f"Текущий торговый режим: {mode}")
-
-async def choose_mode(update: Update, context: CallbackContext):
-    mode_text = update.message.text.strip().lower()
-    from config import set_trading_mode
-    if "скальп" in mode_text:
-        set_trading_mode("scalp")
-        response = "Торговый режим установлен на скальпинг (20-30 минут)."
-    else:
-        set_trading_mode("long")
-        response = "Торговый режим установлен на дневной (1-2 дня)."
-    main_keyboard = [
-        ["🚀 Установить баланс", "💰 Посмотреть баланс"],
-        ["📊 История сигналов", "📜 История сделок"],
-        ["✅ Добавить прибыльную сделку", "❌ Добавить убыточную сделку"],
-        ["➕ Добавить позицию", "📈 Мои позиции"],
-        ["/setmode", "/getmode"],
-        ["❌ Удалить позицию"]
-    ]
-    reply_markup = ReplyKeyboardMarkup(main_keyboard, resize_keyboard=True)
-    await update.message.reply_text(response, reply_markup=reply_markup)
 
 async def handle_text(update: Update, context: CallbackContext):
     chat_id = update.message.chat_id
@@ -355,23 +322,11 @@ async def handle_text(update: Update, context: CallbackContext):
         elif step == 3:
             await set_position_leverage(update, context)
         elif step == 4:
-            # Новый шаг: ввести сумму инвестиций (stake)
             await set_position_stake(update, context)
         elif step == 5:
             await set_position_entry(update, context)
     elif update.message.text.strip() in ["Дневной режим", "Скальпинг"]:
         await choose_mode(update, context)
-
-# Новая функция для установки стейка
-async def set_position_stake(update: Update, context: CallbackContext):
-    chat_id = update.message.chat_id
-    try:
-        stake = float(update.message.text.strip())
-        position_creation[chat_id]["stake"] = stake
-        position_creation[chat_id]["step"] = 5
-        await update.message.reply_text("Введите цену входа (например: 100):")
-    except ValueError:
-        await update.message.reply_text("⚠️ Введите корректную сумму инвестиций!")
 
 def run_telegram_bot():
     from telegram.ext import Application
