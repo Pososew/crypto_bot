@@ -6,3 +6,5 @@ trades.txt
 signals_enabled.txt
 open_positions.json
 trading_mode.txt
+__pycache__/
+*.pyc
